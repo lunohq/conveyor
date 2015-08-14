@@ -13,6 +13,9 @@ import (
 
 	"github.com/fsouza/go-dockerclient"
 	"github.com/google/go-github/github"
+	"github.com/jinzhu/gorm"
+	_ "github.com/lib/pq"
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/remind101/pkg/reporter"
 
 	"golang.org/x/net/context"
@@ -82,6 +85,8 @@ func (fn BuilderFunc) Build(ctx context.Context, w Logger, opts BuildOptions) (s
 type Conveyor struct {
 	Builder
 
+	Builds *BuildsService
+
 	// A Reporter to use to report errors.
 	Reporter reporter.Reporter
 
@@ -92,13 +97,20 @@ type Conveyor struct {
 
 // New returns a new Conveyor instance.
 func New(b Builder) *Conveyor {
+	db, err := gorm.Open("sqlite3", ":memory:")
+	if err != nil {
+		panic(err)
+	}
+	db.AutoMigrate(&Build{})
+
 	return &Conveyor{
 		Builder: WithCancel(b),
+		Builds:  &BuildsService{db: &db},
 		Timeout: DefaultTimeout,
 	}
 }
 
-func (c *Conveyor) Build(ctx context.Context, w Logger, opts BuildOptions) (id string, err error) {
+func (c *Conveyor) Build(ctx context.Context, w Logger, opts BuildOptions) (b *Build, err error) {
 	log.Printf("Starting build: repository=%s branch=%s sha=%s",
 		opts.Repository,
 		opts.Branch,
@@ -123,7 +135,15 @@ func (c *Conveyor) Build(ctx context.Context, w Logger, opts BuildOptions) (id s
 		}
 	}()
 
+	var id string
 	id, err = c.build(ctx, w, opts)
+	if err != nil {
+		return
+	}
+
+	b = &Build{Identifier: id, BuildOptions: opts}
+	err = c.Builds.Create(b)
+
 	return
 }
 
@@ -393,20 +413,6 @@ func (b *statusUpdaterBuilder) updateStatus(w Logger, opts BuildOptions, status 
 		TargetURL:   url,
 	})
 	return err
-}
-
-// BuildAsync wraps a Builder to run the build in a goroutine.
-func BuildAsync(b Builder) Builder {
-	build := func(ctx context.Context, w Logger, opts BuildOptions) {
-		if _, err := b.Build(ctx, w, opts); err != nil {
-			log.Printf("build err: %v", err)
-		}
-	}
-
-	return BuilderFunc(func(ctx context.Context, w Logger, opts BuildOptions) (string, error) {
-		go build(ctx, w, opts)
-		return "", nil
-	})
 }
 
 // WithCancel wraps a Builder with a method to stop all builds.

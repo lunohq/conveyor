@@ -3,6 +3,7 @@ package conveyor
 import (
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"regexp"
 	"strings"
@@ -17,7 +18,7 @@ import (
 // Server implements the http.Handler interface for serving build requests via
 // GitHub webhooks.
 type Server struct {
-	Builder
+	*Conveyor
 	LogFactory LogFactory
 
 	// mux contains the routes.
@@ -26,7 +27,7 @@ type Server struct {
 
 // NewServer returns a new Server instance
 func NewServer(b *Conveyor) *Server {
-	s := &Server{Builder: BuildAsync(b)}
+	s := &Server{Conveyor: b}
 
 	r := hookshot.NewRouter()
 	r.HandleFunc("ping", s.Ping)
@@ -78,15 +79,15 @@ func (s *Server) Push(w http.ResponseWriter, r *http.Request) {
 		NoCache:    noCache(event.HeadCommit.Message),
 	}
 
-	log, err := s.newLogger(opts)
+	l, err := s.newLogger(opts)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	if _, err := s.Build(ctx, log, opts); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	w.WriteHeader(http.StatusOK)
+	if _, err := s.Build(ctx, l, opts); err != nil {
+		log.Printf("build err: %v", err)
 	}
 }
 
